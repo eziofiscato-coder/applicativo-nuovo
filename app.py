@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import date, datetime, time
 import io
 
-st.set_page_config(page_title="ANA Varese - 4 Form Essenziali", page_icon="🛡️", layout="wide")
+st.set_page_config(page_title="ANA Varese - 5 Form Completi", page_icon="🛡️", layout="wide")
 
 # Inizializza sessione
 for k in ["volontari", "radio_db", "consegna_radio", "alias_radio", "brogliaccio"]:
@@ -24,10 +24,10 @@ def to_excel(df):
         df.to_excel(writer, index=False)
     return output.getvalue()
 
-st.title("🛡️ ANA Varese - Gestionale 4 Form")
-st.caption("Estratto da app.py originale - Solo Volontari / Consegna Radio / Alias / Brogliaccio")
+st.title("🛡️ ANA Varese - Gestionale 5 Form")
+st.caption("Completo - Volontari / DB Radio / Consegna Radio / Alias / Brogliaccio")
 
-menu = st.sidebar.radio("Seleziona Form", ["Volontari (con foto)", "Consegna Radio", "Alias Radio", "Brogliaccio"], index=0)
+menu = st.sidebar.radio("Seleziona Form", ["Volontari (con foto)", "DB Radio", "Consegna Radio", "Alias Radio", "Brogliaccio"], index=0)
 
 # ================= VOLONTARI =================
 if menu == "Volontari (con foto)":
@@ -100,7 +100,62 @@ if menu == "Volontari (con foto)":
         st.dataframe(df, use_container_width=True)
         st.download_button("⬇️ Excel Volontari", to_excel(df), "volontari.xlsx", use_container_width=True)
 
+
+# ================= DB RADIO =================
+elif menu == "DB Radio":
+    st.header("📡 DB Radio - Anagrafica Apparati")
+    st.caption("Database completo delle radio - Matricola, Modello, Serie, Stato")
+    
+    with st.form("form_db_radio", clear_on_submit=True):
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            matricola = st.text_input("Matricola *", placeholder="Es: PD785-001", key="db_mat")
+            modello = st.selectbox("Modello *", ["Hytera PD785", "Hytera PD785G", "Anytone 878", "Anytone 578", "Motorola DP4400", "Motorola DP4800", "Baofeng UV-5R", "Altro"], key="db_mod")
+            if modello == "Altro":
+                modello = st.text_input("Specifica Modello", key="db_mod_altro") or modello
+            num_serie = st.text_input("Numero Serie", key="db_serie")
+        with c2:
+            frequenza = st.text_input("Frequenza / Canale", placeholder="Es: 172.350", key="db_freq")
+            proprietario = st.selectbox("Proprietario ODV", ["ANA Varese", "ANA Milano", "Protezione Civile", "Altro"], key="db_prop")
+            stato_radio = st.selectbox("Stato", ["Operativa", "In riparazione", "Fuori servizio", "Riserva", "Dispersa"], key="db_stato")
+        with c3:
+            data_acq = st.date_input("Data Acquisto", key="db_data")
+            note_radio = st.text_area("Note", key="db_note")
+        
+        submitted_db = st.form_submit_button("💾 SALVA RADIO IN DB", type="primary", use_container_width=True)
+        if submitted_db:
+            if matricola and modello:
+                st.session_state.radio_db.append({
+                    "Matricola": matricola,
+                    "Modello": modello,
+                    "NumSerie": num_serie,
+                    "Frequenza": frequenza,
+                    "Proprietario": proprietario,
+                    "Stato": stato_radio,
+                    "DataAcquisto": str(data_acq),
+                    "Note": note_radio
+                })
+                st.success(f"Radio {matricola} - {modello} salvata!")
+                st.rerun()
+            else:
+                st.error("Compila Matricola e Modello *")
+
+    if st.session_state.radio_db:
+        st.subheader(f"Elenco Radio ({len(st.session_state.radio_db)})")
+        df = pd.DataFrame(st.session_state.radio_db)
+        st.dataframe(df, use_container_width=True)
+        col1, col2 = st.columns(2)
+        with col1:
+            st.download_button("⬇️ Excel DB Radio", to_excel(df), "db_radio.xlsx", use_container_width=True)
+        with col2:
+            if st.button("🗑️ Svuota DB Radio", use_container_width=True):
+                st.session_state.radio_db = []
+                st.rerun()
+    else:
+        st.info("Nessuna radio in archivio - aggiungi la prima sopra")
+
 # ================= CONSEGNA RADIO =================
+
 elif menu == "Consegna Radio":
     st.header("📻 Consegna Radio - Campi Originali")
     c1, c2 = st.columns(2)
