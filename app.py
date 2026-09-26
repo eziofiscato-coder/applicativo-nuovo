@@ -4,6 +4,16 @@ import pandas as pd
 from datetime import date, datetime, time
 import io
 
+# PDF export - usa reportlab se disponibile, altrimenti fallback
+try:
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet
+    REPORTLAB_OK = True
+except:
+    REPORTLAB_OK = False
+
 st.set_page_config(page_title="ANA Varese - 5 Form Completi", page_icon="🛡️", layout="wide")
 
 # Inizializza sessione
@@ -14,8 +24,8 @@ for k in ["volontari", "radio_db", "consegna_radio", "alias_radio", "brogliaccio
 # Mock radio_db per test se vuoto
 if not st.session_state.radio_db:
     st.session_state.radio_db = [
-        {"Matricola": "PD785-001", "Modello": "Hytera PD785"},
-        {"Matricola": "ANY-878-002", "Modello": "Anytone 878"}
+        {"Matricola": "PD785-001", "Modello": "Hytera PD785", "Tipo": "DMR Regionali", "Stato": "Operativa"},
+        {"Matricola": "ANY-878-002", "Modello": "Anytone 878", "Tipo": "Radio Amatoriale", "Stato": "Operativa"}
     ]
 
 def to_excel(df):
@@ -24,17 +34,71 @@ def to_excel(df):
         df.to_excel(writer, index=False)
     return output.getvalue()
 
+def to_pdf(df, title):
+    """Genera PDF da DataFrame - per tutti i form"""
+    output = io.BytesIO()
+    if REPORTLAB_OK and not df.empty:
+        try:
+            doc = SimpleDocTemplate(output, pagesize=landscape(A4), leftMargin=20, rightMargin=20, topMargin=30, bottomMargin=20)
+            styles = getSampleStyleSheet()
+            story = []
+            story.append(Paragraph(f"<b>{title} - ANA Varese</b> - {datetime.now().strftime('%d/%m/%Y %H:%M')}", styles['Title']))
+            story.append(Spacer(1, 20))
+            # Prepara dati tabella
+            cols = list(df.columns)[:10]  # max 10 colonne per stare in pagina
+            data = [cols] + df[cols].astype(str).values.tolist()[:100]  # max 100 righe
+            table = Table(data, repeatRows=1)
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1A5D1A')),
+                ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+                ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+                ('FONTSIZE', (0,0), (-1,0), 8),
+                ('FONTSIZE', (0,1), (-1,-1), 6),
+                ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+                ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor('#e8f5e9')]),
+            ]))
+            story.append(table)
+            doc.build(story)
+            return output.getvalue()
+        except Exception as e:
+            st.error(f"Errore PDF: {e}")
+            return None
+    else:
+        # Fallback: PDF testuale semplice se reportlab non c'è
+        try:
+            from reportlab.pdfgen import canvas
+            from reportlab.lib.pagesizes import landscape, A4
+            c = canvas.Canvas(output, pagesize=landscape(A4))
+            c.setFont("Helvetica-Bold", 14)
+            c.drawString(30, 550, f"{title} - ANA Varese - {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+            c.setFont("Helvetica", 8)
+            y = 520
+            cols = " | ".join(list(df.columns)[:8])
+            c.drawString(30, y, cols)
+            y -= 15
+            for _, row in df.head(80).iterrows():
+                txt = " | ".join([str(row[c])[:20] for c in list(df.columns)[:8]])
+                c.drawString(30, y, txt)
+                y -= 10
+                if y < 30:
+                    c.showPage()
+                    y = 550
+            c.save()
+            return output.getvalue()
+        except:
+            return None
+
+TIPI_RADIO = ["DMR Regionali", "Tetra", "PMR 446", "Nautiche", "Radio Amatoriale", "DMR Commerciale", "Analogica VHF", "Analogica UHF", "CB 27 MHz", "LPD 433", "Altro"]
+
 st.title("🛡️ ANA Varese - Gestionale 5 Form")
-st.caption("Completo - Volontari / DB Radio / Consegna Radio / Alias / Brogliaccio")
+st.caption("Completo - Volontari / DB Radio / Consegna Radio / Alias / Brogliaccio - con PDF")
 
 menu = st.sidebar.radio("Seleziona Form", ["Volontari (con foto)", "DB Radio", "Consegna Radio", "Alias Radio", "Brogliaccio"], index=0)
 
 # ================= VOLONTARI =================
 if menu == "Volontari (con foto)":
     st.header("👤 Volontari (con foto) - Campi Originali")
-    
     tab1, tab2, tab3, tab4 = st.tabs(["Anagrafica + Capo ODV", "Contatti", "Ruolo e Squadra", "Foto e Documenti"])
-    
     with st.form("form_volontario_completo", clear_on_submit=False):
         with tab1:
             c1, c2 = st.columns(2)
@@ -78,7 +142,6 @@ if menu == "Volontari (con foto)":
         submitted = st.form_submit_button("💾 SALVA VOLONTARIO", type="primary", use_container_width=True)
         if submitted:
             if nome and cognome and cellulare and capo_odv:
-                foto_bytes = foto_file.getvalue() if foto_file else None
                 nuovo = {
                     "Nome": nome, "Cognome": cognome, "Comune": comune, "Via": via,
                     "CapoODV": capo_odv, "ODVAppartenenza": odv_app,
@@ -98,13 +161,18 @@ if menu == "Volontari (con foto)":
     if st.session_state.volontari:
         df = pd.DataFrame(st.session_state.volontari)
         st.dataframe(df, use_container_width=True)
-        st.download_button("⬇️ Excel Volontari", to_excel(df), "volontari.xlsx", use_container_width=True)
-
+        c1, c2 = st.columns(2)
+        with c1:
+            st.download_button("⬇️ Excel Volontari", to_excel(df), "volontari.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+        with c2:
+            pdf = to_pdf(df, "VOLONTARI")
+            if pdf:
+                st.download_button("📄 PDF Volontari", pdf, "volontari.pdf", mime="application/pdf", use_container_width=True)
 
 # ================= DB RADIO =================
 elif menu == "DB Radio":
     st.header("📡 DB Radio - Anagrafica Apparati")
-    st.caption("Database completo delle radio - Matricola, Modello, Serie, Stato")
+    st.caption("Con campo Tipo: DMR Regionali, Tetra, PMR 446, Nautiche, Radio Amatoriale, ecc.")
     
     with st.form("form_db_radio", clear_on_submit=True):
         c1, c2, c3 = st.columns(3)
@@ -115,10 +183,13 @@ elif menu == "DB Radio":
                 modello = st.text_input("Specifica Modello", key="db_mod_altro") or modello
             num_serie = st.text_input("Numero Serie", key="db_serie")
         with c2:
+            tipo_radio = st.selectbox("Tipo Radio *", TIPI_RADIO, index=0, key="db_tipo", help="Seleziona: DMR Regionali, Tetra, PMR 446, Nautiche, Radio Amatoriale, ecc.")
+            if tipo_radio == "Altro":
+                tipo_radio = st.text_input("Specifica Tipo", placeholder="Es: DMR Tier III", key="db_tipo_altro") or tipo_radio
             frequenza = st.text_input("Frequenza / Canale", placeholder="Es: 172.350", key="db_freq")
             proprietario = st.selectbox("Proprietario ODV", ["ANA Varese", "ANA Milano", "Protezione Civile", "Altro"], key="db_prop")
-            stato_radio = st.selectbox("Stato", ["Operativa", "In riparazione", "Fuori servizio", "Riserva", "Dispersa"], key="db_stato")
         with c3:
+            stato_radio = st.selectbox("Stato", ["Operativa", "In riparazione", "Fuori servizio", "Riserva", "Dispersa"], key="db_stato")
             data_acq = st.date_input("Data Acquisto", key="db_data")
             note_radio = st.text_area("Note", key="db_note")
         
@@ -128,6 +199,7 @@ elif menu == "DB Radio":
                 st.session_state.radio_db.append({
                     "Matricola": matricola,
                     "Modello": modello,
+                    "Tipo": tipo_radio,
                     "NumSerie": num_serie,
                     "Frequenza": frequenza,
                     "Proprietario": proprietario,
@@ -135,7 +207,7 @@ elif menu == "DB Radio":
                     "DataAcquisto": str(data_acq),
                     "Note": note_radio
                 })
-                st.success(f"Radio {matricola} - {modello} salvata!")
+                st.success(f"Radio {matricola} - {modello} [{tipo_radio}] salvata!")
                 st.rerun()
             else:
                 st.error("Compila Matricola e Modello *")
@@ -143,11 +215,25 @@ elif menu == "DB Radio":
     if st.session_state.radio_db:
         st.subheader(f"Elenco Radio ({len(st.session_state.radio_db)})")
         df = pd.DataFrame(st.session_state.radio_db)
-        st.dataframe(df, use_container_width=True)
-        col1, col2 = st.columns(2)
+        # Filtro per Tipo
+        if "Tipo" in df.columns:
+            tipi_presenti = ["Tutti"] + sorted(df["Tipo"].dropna().unique().tolist())
+            filtro_tipo = st.selectbox("Filtra per Tipo", tipi_presenti, key="filtro_tipo")
+            if filtro_tipo != "Tutti":
+                df_view = df[df["Tipo"] == filtro_tipo]
+            else:
+                df_view = df
+        else:
+            df_view = df
+        st.dataframe(df_view, use_container_width=True)
+        col1, col2, col3 = st.columns(3)
         with col1:
-            st.download_button("⬇️ Excel DB Radio", to_excel(df), "db_radio.xlsx", use_container_width=True)
+            st.download_button("⬇️ Excel DB Radio", to_excel(df_view), "db_radio.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
         with col2:
+            pdf = to_pdf(df_view, "DB RADIO")
+            if pdf:
+                st.download_button("📄 PDF DB Radio", pdf, "db_radio.pdf", mime="application/pdf", use_container_width=True)
+        with col3:
             if st.button("🗑️ Svuota DB Radio", use_container_width=True):
                 st.session_state.radio_db = []
                 st.rerun()
@@ -155,14 +241,13 @@ elif menu == "DB Radio":
         st.info("Nessuna radio in archivio - aggiungi la prima sopra")
 
 # ================= CONSEGNA RADIO =================
-
 elif menu == "Consegna Radio":
     st.header("📻 Consegna Radio - Campi Originali")
     c1, c2 = st.columns(2)
     with c1:
         vol_list = [f"{v.get('Cognome','')} {v.get('Nome','')}" for v in st.session_state.volontari]
         sel_vol = st.selectbox("Volontario", vol_list, key="c_vol") if vol_list else st.text_input("Volontario (manuale)", key="c_vol_man")
-        radio_list = [f"{r.get('Matricola','')} - {r.get('Modello','')}" for r in st.session_state.radio_db]
+        radio_list = [f"{r.get('Matricola','')} - {r.get('Modello','')} [{r.get('Tipo','')}]" for r in st.session_state.radio_db]
         sel_radio = st.selectbox("Radio", radio_list, key="c_radio") if radio_list else st.text_input("Radio manuale", key="c_radio_man")
     with c2:
         data_cons = st.date_input("Data Consegna", value=date.today(), format="DD/MM/YYYY", key="c_data")
@@ -184,7 +269,13 @@ elif menu == "Consegna Radio":
     if st.session_state.consegna_radio:
         df = pd.DataFrame(st.session_state.consegna_radio)
         st.dataframe(df, use_container_width=True)
-        st.download_button("⬇️ Excel Consegne", to_excel(df), "consegne.xlsx", use_container_width=True)
+        c1, c2 = st.columns(2)
+        with c1:
+            st.download_button("⬇️ Excel Consegne", to_excel(df), "consegne.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+        with c2:
+            pdf = to_pdf(df, "CONSEGNA RADIO")
+            if pdf:
+                st.download_button("📄 PDF Consegne", pdf, "consegna_radio.pdf", mime="application/pdf", use_container_width=True)
 
 # ================= ALIAS RADIO =================
 elif menu == "Alias Radio":
@@ -213,7 +304,13 @@ elif menu == "Alias Radio":
     if st.session_state.alias_radio:
         df = pd.DataFrame(st.session_state.alias_radio)
         st.dataframe(df, use_container_width=True)
-        st.download_button("⬇️ Excel Alias", to_excel(df), "alias.xlsx", use_container_width=True)
+        c1, c2 = st.columns(2)
+        with c1:
+            st.download_button("⬇️ Excel Alias", to_excel(df), "alias.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+        with c2:
+            pdf = to_pdf(df, "ALIAS RADIO")
+            if pdf:
+                st.download_button("📄 PDF Alias", pdf, "alias_radio.pdf", mime="application/pdf", use_container_width=True)
 
 # ================= BROGLIACCIO =================
 elif menu == "Brogliaccio":
@@ -263,4 +360,10 @@ elif menu == "Brogliaccio":
         if cols_show:
             st.markdown("**Vista sintetica:**")
             st.dataframe(df[cols_show], use_container_width=True)
-        st.download_button("⬇️ Excel Brogliaccio", to_excel(df), "brogliaccio.xlsx", use_container_width=True)
+        c1, c2 = st.columns(2)
+        with c1:
+            st.download_button("⬇️ Excel Brogliaccio", to_excel(df), "brogliaccio.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+        with c2:
+            pdf = to_pdf(df, "BROGLIACCIO RADIO")
+            if pdf:
+                st.download_button("📄 PDF Brogliaccio", pdf, "brogliaccio.pdf", mime="application/pdf", use_container_width=True)
